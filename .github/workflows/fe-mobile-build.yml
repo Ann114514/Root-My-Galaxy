@@ -24,10 +24,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Set up Android SDK 37 and CMake
+      - name: Set up Android SDK and CMake
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37 cmake;3.22.1'
+          packages: 'platform-tools platforms;android-35 cmake;3.22.1'
       - name: Set up NDK r28
         uses: nttld/setup-ndk@v1
         with:

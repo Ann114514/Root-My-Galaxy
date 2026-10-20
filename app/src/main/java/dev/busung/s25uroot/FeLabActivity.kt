@@ -63,15 +63,19 @@ class FeLabActivity : ComponentActivity() {
 private fun FeLabScreen() {
     val scope = rememberCoroutineScope()
     val kernel = remember { runCatching { Os.uname().release }.getOrDefault("unknown") }
-    val exactFe = Build.MODEL == "SM-G781W" && kernel == "4.19.113-27223811"
+    val firmware = Build.VERSION.INCREMENTAL
+    val modelMatches = Build.MODEL == "SM-G781W"
+    val kernelMatches = kernel == "4.19.113-27223811"
+    val firmwareMatches = firmware.contains("G781WVLSLHYJ1", ignoreCase = true)
+    val exactFe = modelMatches && kernelMatches && firmwareMatches
     var accepted by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
-    var output by remember { mutableStateOf("尚未运行") }
+    var output by remember { mutableStateOf("Root 状态：尚未测试。") }
 
     fun start(dry: Boolean) {
         if (running || (!dry && !accepted)) return
         running = true
-        output = "准备通过 Shizuku shell 运行 FE 原版二进制……"
+        output = "Root 状态：尚未取得 Root。\n正在连接 Shizuku、下载并校验 FE 原版程序……"
         scope.launch {
             try {
                 check(ShizukuController.pingUntilRunning()) {
@@ -82,7 +86,7 @@ private fun FeLabScreen() {
                 }
                 output = withContext(Dispatchers.IO) { FeLabRunner.run(dry) }
             } catch (t: Throwable) {
-                output = "失败：${t.message ?: t.javaClass.simpleName}"
+                output = "Root 状态：本次未取得 Root。\n启动、下载或校验失败：${t.message ?: t.javaClass.simpleName}"
             } finally {
                 running = false
             }
@@ -96,12 +100,19 @@ private fun FeLabScreen() {
     ) {
         item { Text("FE GhostLock 实验入口", style = MaterialTheme.typography.headlineSmall) }
         item {
-            Text("本机：${Build.MODEL} / $kernel\nFE 原版：SM-G781W / 4.19.113-27223811")
+            Text("运行前兼容性检查", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "型号：${if (modelMatches) "匹配" else "不匹配"}（本机 ${Build.MODEL}；FE SM-G781W）\n" +
+                    "内核：${if (kernelMatches) "匹配" else "不匹配"}（本机 $kernel；FE 4.19.113-27223811）\n" +
+                    "固件：${if (firmwareMatches) "匹配" else "不匹配"}（本机 $firmware；FE G781WVLSLHYJ1）\n" +
+                    "Shizuku 权限：点击运行时检查\n" +
+                    "原版二进制 SHA-256：下载后验证"
+            )
         }
         item {
             Text(
-                if (exactFe) "内核和型号初步匹配；仍需完整固件及利用链核验。"
-                else "注意：本机与 FE 固件不匹配。此入口不能将 FE 变成可用的 G9810 Root。",
+                if (exactFe) "型号、内核与固件版本初步匹配；仍需完整利用链验证。"
+                else "目标不匹配：FE 内置地址不会自动转换成 G9810 地址。本功能只用于实验诊断，不是 G9810 Root。",
                 color = MaterialTheme.colorScheme.error,
             )
         }
@@ -136,7 +147,7 @@ private fun FeLabScreen() {
             }
         }
         if (running) item { CircularProgressIndicator() }
-        item { Text("执行日志", style = MaterialTheme.typography.titleMedium) }
+        item { Text("本次运行结果及原始日志", style = MaterialTheme.typography.titleMedium) }
         item { Text(output, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
         item { Text("说明：真正的 Attempt 68 还需要 HYJ1 专用的前置准备、内核地址和运行时验证材料。") }
     }
@@ -167,10 +178,53 @@ private object FeLabRunner {
                 while (process.isAlive) delay(60)
                 process.exitValue()
             }
-            val allOutput = stdout.await() + stderr.await()
-            "FE 单阶段测试（${if (dry) "仅显示固件偏移" else "受保护执行入口"}）\n" +
-                "exitCode=$code\n" + allOutput + "\n" +
-                "以上输出不代表 Root。请根据日志中的失败原因判断。"
+            val rawOutput = stdout.await() + stderr.await()
+            val cleaned = rawOutput
+                .replace(Regex("\u001B\\[[0-9;]*[A-Za-z]"), "")
+                .replace(Regex("""\[(?:0|31|32|33|34|36)m"""), "")
+            val stageLine = cleaned.lineSequence().firstOrNull { it.contains("stage-a59-result") }
+            val stageOk = stageLine?.let {
+                Regex("""\bok=(\d+)""").find(it)?.groupValues?.get(1)
+            }
+            val reason = Regex("""\breason=([A-Za-z0-9_-]+)""")
+                .findAll(cleaned).lastOrNull()?.groupValues?.get(1)
+            val attempts = Regex("""\battempts=(\d+)""")
+                .findAll(cleaned).lastOrNull()?.groupValues?.get(1)
+            val rootStatus = when {
+                dry && code == 0 -> "仅完成程序加载检查，没有尝试 Root"
+                dry -> "程序加载检查失败，没有取得 Root"
+                stageOk == "0" -> "本次未取得 Root：受保护阶段拒绝继续"
+                stageOk == "1" -> "程序报告阶段完成，但尚未验证 Root"
+                else -> "未验证 Root：没有可靠的提权阶段成功记录"
+            }
+            val explanation = when (reason) {
+                "missing_arm_token" -> "缺少 FE 特定利用路线的启动令牌；尚未进行漏洞利用，不是 ARM 架构不兼容"
+                "missing_offline_proof" -> "缺少 FE 专用的离线证明，程序拒绝继续"
+                "invalid_hyj1_profile" -> "FE 固件专用地址或内核布局验证失败"
+                "readonly_build_route_rejected" -> "构建版本不允许当前利用路线"
+                "invalid_route_inputs" -> "完整利用链必需的参数尚未准备"
+                null -> if (dry) "此次仅打印 FE 预设偏移，不触发漏洞" else "未识别到明确的拒绝原因"
+                else -> "程序返回：$reason"
+            }
+            val writes = listOf("credential_write", "defex_write", "selinux_write")
+                .mapNotNull { key ->
+                    Regex("""\b$key=(\d+)""")
+                        .findAll(cleaned).lastOrNull()?.groupValues?.get(1)
+                        ?.let { "$key=$it" }
+                }
+            buildString {
+                appendLine("Root 状态：$rootStatus")
+                appendLine("Shizuku：连接成功")
+                appendLine("程序完整性：官方 FE 文件 SHA-256 校验通过")
+                appendLine("执行模式：${if (dry) "只读取预设信息（dry）" else "受保护单阶段测试"}")
+                appendLine("原因：$explanation")
+                if (attempts != null) appendLine("程序报告的实际尝试次数：$attempts")
+                if (writes.isNotEmpty()) appendLine("程序报告的写入情况：${writes.joinToString(", ")}")
+                appendLine("Shell 退出码：$code（不能作为 Root 成功依据）")
+                appendLine()
+                appendLine("----- 原始日志 -----")
+                appendLine(cleaned)
+            }
         } finally {
             if (process.isAlive) process.destroy()
         }
