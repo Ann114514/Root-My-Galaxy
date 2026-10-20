@@ -26,6 +26,12 @@ android {
         }
     }
 
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".felab"
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

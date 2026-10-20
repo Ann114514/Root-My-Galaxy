@@ -206,6 +206,7 @@ class MainActivity : ComponentActivity() {
                         }
                         startActivity(installer)
                     },
+                    openFeLab = { startActivity(Intent(this, FeLabActivity::class.java)) },
                 )
             }
         }
@@ -285,6 +286,7 @@ private fun RootApp(
     onAdvancedModeChanged: (Boolean) -> Unit,
     onShizukuModeChanged: (Boolean) -> Unit,
     openInstaller: (String?) -> Unit,
+    openFeLab: () -> Unit,
 ) {
     val installState by installViewModel.state.collectAsStateWithLifecycle()
     val history by installViewModel.history.collectAsStateWithLifecycle()
@@ -482,6 +484,7 @@ private fun RootApp(
                     updateCardDismissed = updateCardDismissed,
                     onDismissUpdateCard = { updateCardDismissed = true },
                     onStartDownload = startDownload,
+                    onFeLab = openFeLab,
                     onInstall = {
                         selectedProfile = null
                         if (advancedMode) {
@@ -558,6 +561,7 @@ private fun OverviewPage(
     onDismissUpdateCard: () -> Unit,
     onStartDownload: (UpdateInfo) -> Unit,
     onInstall: () -> Unit,
+    onFeLab: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -602,6 +606,11 @@ private fun OverviewPage(
         }
         item { InstallStatusCard(installState, onInstall) }
         item { DeviceCard(device) }
+        item {
+            FilledTonalButton(onClick = onFeLab, modifier = Modifier.fillMaxWidth()) {
+                Text("FE GhostLock 实验入口")
+            }
+        }
         item { HowItWorksCard() }
     }
 }
